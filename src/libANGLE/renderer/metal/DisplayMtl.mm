@@ -25,9 +25,14 @@
 
 namespace rx
 {
-
 bool IsMetalDisplayAvailable()
 {
+    static int sHasMetalDevice = -1;
+
+    if (sHasMetalDevice != -1)
+    {
+        return sHasMetalDevice;
+    }
     // We only support macos 10.13+ and 11 for now. Since they are requirements for Metal 2.0.
 #if TARGET_OS_SIMULATOR
     if (ANGLE_APPLE_AVAILABLE_XCI(10.13, 13.0, 13))
@@ -35,9 +40,34 @@ bool IsMetalDisplayAvailable()
     if (ANGLE_APPLE_AVAILABLE_XCI(10.13, 13.0, 11))
 #endif
     {
-        return true;
+        ANGLE_MTL_OBJC_SCOPE
+        {
+#if TARGET_OS_OSX || TARGET_OS_MACCATALYST
+            // On MacOS we need another method to determin whether Metal is supported.
+            NSArray<id<MTLDevice>> *devices = MTLCopyAllDevices();
+            [devices ANGLE_MTL_AUTORELEASE];
+            if ([devices count] == 0)
+#else
+            // This doesn't seem to work always
+            // (https://stackoverflow.com/questions/59116802/how-to-check-if-metal-is-supported)
+            id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+            [device ANGLE_MTL_AUTORELEASE];
+            if (!device)
+#endif
+            {
+                NSLog(@"Can't get Metal device. Metal Display won't be available.");
+                sHasMetalDevice = 0;
+            }
+            else
+            {
+                sHasMetalDevice = 1;
+            }
+        }
+        return sHasMetalDevice;
     }
-    return false;
+    NSLog(@"The device is too old to support Metal. Falling back to OpenGL.");
+    sHasMetalDevice = 0;
+    return sHasMetalDevice;
 }
 
 DisplayImpl *CreateMetalDisplay(const egl::DisplayState &state)
@@ -479,7 +509,7 @@ void DisplayMtl::ensureCapsInitialized() const
     mNativeCaps.maxVaryingVectors         = 31 - 1;
     mNativeCaps.maxVertexOutputComponents = mNativeCaps.maxFragmentInputComponents = 124 - 4;
 #else
-    if (supportiOSGPUFamily(3))
+    if (supportsAppleGPUFamily(3))
     {
         mNativeCaps.max2DTextureSize          = 16384;
         mNativeCaps.maxVertexOutputComponents = mNativeCaps.maxFragmentInputComponents = 124;
@@ -701,6 +731,15 @@ void DisplayMtl::initializeExtensions() const
 
         // GL_OES_EGL_sync
         mNativeExtensions.eglSync = true;
+
+        // GL_EXT_semaphore
+        mNativeExtensions.semaphore = true;
+
+        // GL_EXT_semaphore_fd
+        mNativeExtensions.semaphoreFd = true;
+
+        // GL_MGL_timeline_semaphore
+        mNativeExtensions.timelineSemaphoreMGL = true;
     }
 }
 
@@ -729,19 +768,19 @@ void DisplayMtl::initializeFeatures()
     mFeatures.forceBufferGPUStorage.enabled             = false;
     mFeatures.emulateDepthRangeMappingInShader.enabled  = true;
 
-    ANGLE_FEATURE_CONDITION((&mFeatures), hasDepthAutoResolve, supportEitherGPUFamily(3, 2));
-    ANGLE_FEATURE_CONDITION((&mFeatures), hasStencilAutoResolve, supportEitherGPUFamily(5, 2));
-    ANGLE_FEATURE_CONDITION((&mFeatures), allowBufferReadWrite, supportEitherGPUFamily(3, 1));
+    ANGLE_FEATURE_CONDITION((&mFeatures), hasDepthAutoResolve, supportsEitherGPUFamily(3, 2));
+    ANGLE_FEATURE_CONDITION((&mFeatures), hasStencilAutoResolve, supportsEitherGPUFamily(5, 2));
+    ANGLE_FEATURE_CONDITION((&mFeatures), allowBufferReadWrite, supportsEitherGPUFamily(3, 1));
     ANGLE_FEATURE_CONDITION((&mFeatures), allowRuntimeSamplerCompareMode,
-                            supportEitherGPUFamily(3, 1));
+                            supportsEitherGPUFamily(3, 1));
     ANGLE_FEATURE_CONDITION((&mFeatures), allowMultisampleStoreAndResolve,
-                            supportEitherGPUFamily(3, 1));
+                            supportsEitherGPUFamily(3, 1));
 
     if (ANGLE_APPLE_AVAILABLE_XCI(10.15, 13.0, 13.0))
     {
         // Disable Compute Shader based mipmap generation on iOS GPU family 3 and below.
         ANGLE_FEATURE_CONDITION((&mFeatures), forceNonCSBaseMipmapGeneration,
-                                !supportEitherGPUFamily(4, 1));
+                                !supportsEitherGPUFamily(4, 1));
     }
     else
     {
@@ -759,8 +798,13 @@ void DisplayMtl::initializeFeatures()
     }
     if (ANGLE_APPLE_AVAILABLE_XCI(10.15, 13.0, 13.0))
     {
-        ANGLE_FEATURE_CONDITION((&mFeatures), hasTextureSwizzle, supportEitherGPUFamily(1, 2));
+        ANGLE_FEATURE_CONDITION((&mFeatures), hasTextureSwizzle, supportsEitherGPUFamily(1, 2));
     }
+
+    // http://anglebug.com/5235
+    // D24S8 is unreliable on AMD.
+    ANGLE_FEATURE_CONDITION((&mFeatures), forceD24S8AsUnsupported,
+                            getRendererDescription().find("AMD") != std::string::npos);
 
 #if TARGET_OS_OSX || TARGET_OS_MACCATALYST
     mFeatures.hasDepthTextureFiltering.enabled = !ANGLE_MTL_ARM;
@@ -770,10 +814,10 @@ void DisplayMtl::initializeFeatures()
     mFeatures.breakRenderPassIsCheap.enabled = false;
 
     // Base Vertex drawing is only supported since GPU family 3.
-    ANGLE_FEATURE_CONDITION((&mFeatures), hasBaseVertexInstancedDraw, supportiOSGPUFamily(3));
+    ANGLE_FEATURE_CONDITION((&mFeatures), hasBaseVertexInstancedDraw, supportsAppleGPUFamily(3));
 
     ANGLE_FEATURE_CONDITION((&mFeatures), hasNonUniformDispatch,
-                            TARGET_OS_IOS && supportiOSGPUFamily(4));
+                            TARGET_OS_IOS && supportsAppleGPUFamily(4));
 
     ANGLE_FEATURE_CONDITION((&mFeatures), allowSeparatedDepthStencilBuffers, !TARGET_OS_SIMULATOR);
 
@@ -841,14 +885,15 @@ id<MTLLibrary> DisplayMtl::getDefaultShadersLib()
     return mDefaultShaders;
 }
 
-bool DisplayMtl::supportiOSGPUFamily(uint8_t iOSFamily) const
+bool DisplayMtl::supportsAppleGPUFamily(uint8_t iOSFamily) const
 {
-#if (!TARGET_OS_IOS && !TARGET_OS_TV) || TARGET_OS_MACCATALYST
+#if TARGET_OS_MACCATALYST
     return false;
 #else
-#    if (__IPHONE_OS_VERSION_MAX_ALLOWED >= 130000) || (__TV_OS_VERSION_MAX_ALLOWED >= 130000)
+#    if (__IPHONE_OS_VERSION_MAX_ALLOWED >= 130000) || (__TV_OS_VERSION_MAX_ALLOWED >= 130000) || \
+        (__MAC_OS_X_VERSION_MAX_ALLOWED >= 101500)
     // If device supports [MTLDevice supportsFamily:], then use it.
-    if (ANGLE_APPLE_AVAILABLE_I(13.0))
+    if (ANGLE_APPLE_AVAILABLE_XI(10.15, 13.0))
     {
         MTLGPUFamily family;
         switch (iOSFamily)
@@ -868,9 +913,15 @@ bool DisplayMtl::supportiOSGPUFamily(uint8_t iOSFamily) const
             case 5:
                 family = MTLGPUFamilyApple5;
                 break;
-#        if TARGET_OS_IOS
+#        if TARGET_OS_IOS || (TARGET_OS_OSX && (__MAC_OS_X_VERSION_MAX_ALLOWED >= 101600))
             case 6:
                 family = MTLGPUFamilyApple6;
+                break;
+#        endif
+#        if (TARGET_OS_IOS && (__IPHONE_OS_VERSION_MAX_ALLOWED >= 140000)) || \
+            (TARGET_OS_OSX && (__MAC_OS_X_VERSION_MAX_ALLOWED >= 101600))
+            case 7:
+                family = MTLGPUFamilyApple7;
                 break;
 #        endif
             default:
@@ -920,7 +971,7 @@ bool DisplayMtl::supportiOSGPUFamily(uint8_t iOSFamily) const
 #endif      // TARGET_OS_IOS || TARGET_OS_TV
 }
 
-bool DisplayMtl::supportMacGPUFamily(uint8_t macFamily) const
+bool DisplayMtl::supportsMacGPUFamily(uint8_t macFamily) const
 {
 #if TARGET_OS_OSX || TARGET_OS_MACCATALYST
 #    if defined(__MAC_10_15)
@@ -983,9 +1034,9 @@ bool DisplayMtl::supportMacGPUFamily(uint8_t macFamily) const
 #endif
 }
 
-bool DisplayMtl::supportEitherGPUFamily(uint8_t iOSFamily, uint8_t macFamily) const
+bool DisplayMtl::supportsEitherGPUFamily(uint8_t iOSFamily, uint8_t macFamily) const
 {
-    return supportiOSGPUFamily(iOSFamily) || supportMacGPUFamily(macFamily);
+    return supportsAppleGPUFamily(iOSFamily) || supportsMacGPUFamily(macFamily);
 }
 
 #if defined(__IPHONE_12_0) || defined(__MAC_10_14)

@@ -6,6 +6,12 @@
 This is a fork of Google's [ANGLE project](https://chromium.googlesource.com/angle/angle). It adds Metal API backend support.
 Apple announced OpenGL (ES) deprecation in 2018. So the purpose of MetalANGLE is to allow OpenGL ES applications
 to continue operate on Apple platforms by translating OpenGL ES draw calls to Metal draw calls under the hood.
+It also supports OpenGL ES & Metal's interop.
+
+__30 Jun 2021 Update:__ Most of this repo's OpenGL ES 3.0 implementing code in Metal has been merged into official `ANGLE` repo.
+Initially, this was the only place where Metal backend's developments took place. It is not true anymore as `Apple` are also
+making modifications and are in a progress of merging their changes into official `ANGLE`.
+See current [Differences between MetalANGLE and official ANGLE](#differences-between-metalangle-and-googles-angle).
 
 Preliminary Metal based WebGL benchmarks (based on [gles3-dev branch](https://github.com/kakashidinho/metalangle/tree/gles3-dev) code):
 
@@ -14,14 +20,13 @@ Preliminary Metal based WebGL benchmarks (based on [gles3-dev branch](https://gi
 - This benchmark runs [https://webglsamples.org/aquarium/aquarium.html](https://webglsamples.org/aquarium/aquarium.html) on Chromium browser using AMD Radeon Pro 560 GPU.
 
 ### Current Metal backend implementation status
-- MetalANGLE is being migrated into official ANGLE repo. So this repo might not get updated for a
-  while. See current [Differences between MetalANGLE and official
+- MetalANGLE has been migrated into official ANGLE repo. See current [Differences between MetalANGLE and official
   ANGLE](#differences-between-metalangle-and-googles-angle).
 - __OpenGL ES 2.0__ functionalities are 100% completed.
 - __OpenGL ES 3.0__ status:
   - [x] Occlusion queries.
   - [x] MSAA.
-  - [x] Multiple render targets.
+  - [x] Multiple render targets (__Not all GL formats are supported on old iOS GPUs__ due to [pixel storage's limits](https://developer.apple.com/documentation/metal/textures/understanding_color-renderable_pixel_format_sizes?language=objc). See [#issue 64](https://github.com/kakashidinho/metalangle/issues/64)).
   - [x] 3D, array, shadow textures.
   - [x] Texture swizzles (__supported on iOS 13.0+, macOS 10.15+ only__).
   - [x] Uniform buffers.
@@ -44,6 +49,7 @@ Preliminary Metal based WebGL benchmarks (based on [gles3-dev branch](https://gi
 - [MGLKit](src/libANGLE/renderer/metal/DevSetup.md#MGLKit) utilities classes have been added. Providing kind of similar functionalies to Apples's GLKit.
 - Urho3D engine's demos have been tested using MetalANGLE without issues. See [Urho3D's MetalANGLE integration testing branch](https://github.com/kakashidinho/Urho3D/tree/angle-metal-backend).
 - Irrlicht Engine's integration with MetalANGLE sample: [https://github.com/kakashidinho/irrlicht](https://github.com/kakashidinho/irrlicht).
+- Interop with Metal is supported, see Qt example: https://github.com/kakashidinho/qml-metalangle.
 - ~~No `GL_TRIANGLE_FAN` & `GL_LINE_LOOP` support in draw calls yet.~~
 - Metal doesn't allow buffer offset not being multiple of 4 bytes or multiple of attribute's size.
   Hence, draw calls that use unsupported offsets, strides, and vertex formats will force MetalANGLE
@@ -82,9 +88,14 @@ Nevertheless, you still need to setup the required environment and dependencies 
 [Metal backend's Dev setup instructions](src/libANGLE/renderer/metal/DevSetup.md) first.
 
 ## Differences between MetalANGLE and Google's ANGLE
-- Most of the Metal back-end code are shared between `MetalANGLE` and `ANGLE`.
-- Some Metal's updates and bug fixes will be available in `MetalANGLE` first before being merged
-  into `ANGLE` (it might take a long time some time).
+- Before June 2021, most of the Metal back-end code are shared between `MetalANGLE` and `ANGLE`.
+- From Aug-Sep 2021 onward, there would be some changes from `Apple` directly to `ANGLE` repo. Those changes might not be
+  included in `MetalANGLE` because of some development conflicts. Most of the Apple's changes benefit the Webkit's
+  WebGL standards and might not have optimal performance for normal uses. These changes from Apple include:
+    - Rewriting the index buffer on the fly to support last provoking vertex of flat shading. While this helps
+      conforming to OpenGL ES's flat shading's specifications, it makes draw calls using flat shading become
+      slower. In majority of use cases, user wouldn't care whether flat shading uses last or first
+      provoking vertex.
 - `MetalANGLE` includes iOS supports and high level API such as
   [MGLKit](src/libANGLE/renderer/metal/DevSetup.md#MGLKit) that mimics Apple's deprecated `EAGL` &
   `GLKit` API. These features are unlikely to be merged into `ANGLE` since `ANGLE` project doesn't
@@ -103,8 +114,8 @@ underway, and future plans include compute shader support (ES 3.1) and MacOS sup
 
 |                |  Direct3D 9   |  Direct3D 11     |   Desktop GL   |    GL ES      |    Vulkan     |    Metal      |
 |----------------|:-------------:|:----------------:|:--------------:|:-------------:|:-------------:|:-------------:|
-| OpenGL ES 2.0  |    complete   |    complete      |    complete    |   complete    |    complete   |  in progress  |
-| OpenGL ES 3.0  |               |    complete      |    complete    |   complete    |  in progress  |  in progress  |
+| OpenGL ES 2.0  |    complete   |    complete      |    complete    |   complete    |    complete   |  complete     |
+| OpenGL ES 3.0  |               |    complete      |    complete    |   complete    |  in progress  |  90% complete |
 | OpenGL ES 3.1  |               |   in progress    |    complete    |   complete    |  in progress  |               |
 | OpenGL ES 3.2  |               |                  |    planned     |    planned    |    planned    |               |
 
@@ -114,8 +125,8 @@ underway, and future plans include compute shader support (ES 3.1) and MacOS sup
 |------------:|:--------------:|:--------------:|:-------------:|:-----------:|:-----------:|:-----------:|
 | Windows     |    complete    |    complete    |   complete    |   complete  |   complete  |             |
 | Linux       |                |                |   complete    |             |   complete  |             |
-| Mac OS X    |                |                |   complete    |             |             | in progress |
-| iOS         |                |                |               |             |             | in progress |
+| Mac OS X    |                |                |   complete    |             |             | complete    |
+| iOS         |                |                |               |             |             | complete    |
 | Chrome OS   |                |                |               |   complete  |   planned   |             |
 | Android     |                |                |               |   complete  |   complete  |             |
 | Fuchsia     |                |                |               |             | in progress |             |
